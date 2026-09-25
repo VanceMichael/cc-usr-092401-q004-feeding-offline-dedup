@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Optional, List
+from pydantic import BaseModel, Field
+from typing import Optional, List, Any
 from datetime import date, datetime
 
 class PondBase(BaseModel):
@@ -86,6 +86,13 @@ class StockingRecordResponse(StockingRecordBase):
     class Config:
         orm_mode = True
 
+# 参与“内容是否相同”判定的业务字段（设备身份与时间戳不参与）
+FEEDING_CONTENT_FIELDS = (
+    "batch_id", "feeding_date", "feed_type", "feed_quantity",
+    "feeding_time", "weather", "water_temperature", "notes",
+)
+
+
 class FeedingRecordBase(BaseModel):
     batch_id: int
     feeding_date: date
@@ -96,8 +103,20 @@ class FeedingRecordBase(BaseModel):
     water_temperature: Optional[float] = None
     notes: Optional[str] = None
 
+
 class FeedingRecordCreate(FeedingRecordBase):
-    pass
+    # —— 离线同步身份：人工录入可不传 ——
+    device_id: Optional[str] = Field(default=None, max_length=64)
+    device_seq: Optional[int] = None
+    occurred_at: Optional[datetime] = None
+    # sync_mode=create（默认）幂等创建；revision 更正；revocation 撤销
+    sync_mode: Optional[str] = None
+    # 更正/撤销时指定的生效时点（缺省为当前，即立即生效）
+    effective_at: Optional[datetime] = None
+    # 更正/撤销时携带的设备键（也可走同键重传）
+    revision_of_device_id: Optional[str] = None
+    revision_of_device_seq: Optional[int] = None
+
 
 class FeedingRecordUpdate(BaseModel):
     batch_id: Optional[int] = None
@@ -109,12 +128,106 @@ class FeedingRecordUpdate(BaseModel):
     water_temperature: Optional[float] = None
     notes: Optional[str] = None
 
+
 class FeedingRecordResponse(FeedingRecordBase):
     id: int
     created_at: datetime
 
+    # 同步与版本信息
+    device_id: Optional[str] = None
+    device_seq: Optional[int] = None
+    source: str = "manual"
+    occurred_at: Optional[datetime] = None
+    logical_id: Optional[int] = None
+    version: int = 1
+    supersedes_id: Optional[int] = None
+    is_current: bool = True
+    status: str = "active"
+    revision_reason: Optional[str] = None
+
+    # 生效/审核/迟报
+    effective_at: datetime
+    review_status: str = "approved"
+    reviewed_at: Optional[datetime] = None
+    is_late: bool = False
+    has_conflict: bool = False
+    # 是否已对“现在”生效（effective_at<=now 且 已审核 且 当前版本）
+    in_effect: bool = True
+
     class Config:
-        orm_mode = True
+        from_attributes = True
+
+
+class FeedingSyncResult(BaseModel):
+    """设备同步结果。result 区分：created / duplicate / conflict / revised / revoked / pending"""
+    result: str
+    record: FeedingRecordResponse
+    conflict_id: Optional[int] = None
+    message: Optional[str] = None
+
+
+class FeedingPage(BaseModel):
+    items: List[FeedingRecordResponse]
+    next_cursor: Optional[str] = None
+    has_more: bool = False
+
+
+class ConflictPayload(BaseModel):
+    batch_id: int
+    feeding_date: date
+    feed_type: str
+    feed_quantity: float
+    feeding_time: Optional[str] = None
+    weather: Optional[str] = None
+    water_temperature: Optional[float] = None
+    notes: Optional[str] = None
+    occurred_at: Optional[datetime] = None
+
+
+class FeedingConflictResponse(BaseModel):
+    id: int
+    device_id: str
+    device_seq: int
+    payload: ConflictPayload
+    content_hash: str
+    status: str
+    resolution_note: Optional[str] = None
+    created_at: datetime
+    resolved_at: Optional[datetime] = None
+    current_record: Optional[FeedingRecordResponse] = None
+
+    class Config:
+        from_attributes = True
+
+
+class DailyReportLine(BaseModel):
+    record_id: int
+    logical_id: Optional[int] = None
+    version: int = 1
+    status: str
+    feed_type: str
+    feed_quantity: float
+    feeding_date: date
+    feeding_time: Optional[str] = None
+    is_late: bool = False
+    device_id: Optional[str] = None
+    device_seq: Optional[int] = None
+
+
+class DailyFeedingReportResponse(BaseModel):
+    id: int
+    batch_id: int
+    business_date: date
+    signed_at: datetime
+    as_of: datetime
+    total_quantity: float
+    feeding_count: int
+    lines: List[DailyReportLine]
+    # 重放与当前的差异（签署后是否有新版本生效）
+    changed_since_sign: bool = False
+
+    class Config:
+        from_attributes = True
 
 class WaterQualityRecordBase(BaseModel):
     batch_id: int
@@ -291,6 +404,15 @@ class FeedingRecordTrace(BaseModel):
     feed_type: str
     quantity: float
     unit: Optional[str] = None
+    status: str = "active"
+    revision_reason: Optional[str] = None
+    version: int = 1
+    is_late: bool = False
+    review_status: str = "approved"
+    effective_at: Optional[datetime] = None
+    device_id: Optional[str] = None
+    device_seq: Optional[int] = None
+    record_id: Optional[int] = None
 
 class WaterQualityRecordTrace(BaseModel):
     record_date: date

@@ -2,10 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
-from datetime import date
+from datetime import date, datetime
 from ..database import get_db
 from ..models import Batch, Pond, StockingRecord, FeedingRecord, CostRecord, HarvestSale, WaterQualityRecord, MedicationRecord
 from ..schemas import CultureCycleAnalysis, BatchTraceability, BatchInfo, PondInfo
+from ..services import feeding_service
 
 router = APIRouter(
     prefix="/api/analysis",
@@ -13,69 +14,74 @@ router = APIRouter(
 )
 
 @router.get("/cycle/{batch_id}/", response_model=CultureCycleAnalysis)
-def analyze_cycle(batch_id: int, db: Session = Depends(get_db)):
+def analyze_cycle(batch_id: int, as_of: Optional[datetime] = None,
+                  db: Session = Depends(get_db)):
+    """周期分析。投喂量只统计在 as_of（默认现在）时点生效的版本，
+    重复同步不累计、撤销版本不计、迟报未审批不计。"""
     batch = db.query(Batch).filter(Batch.id == batch_id).first()
     if not batch:
         raise HTTPException(status_code=404, detail="批次不存在")
-    
+
     pond = db.query(Pond).filter(Pond.id == batch.pond_id).first()
-    
+
     initial_quantity = db.query(func.sum(StockingRecord.quantity)).filter(
         StockingRecord.batch_id == batch.id
     ).scalar() or 0
-    
+
     harvest_weight = db.query(func.sum(HarvestSale.weight)).filter(
         HarvestSale.batch_id == batch.id
     ).scalar() or 0
-    
-    feed_total = db.query(func.sum(FeedingRecord.feed_quantity)).filter(
-        FeedingRecord.batch_id == batch.id
-    ).scalar() or 0
-    
+
+    # 投喂：取版本链在该时点的生效记录（已去重、已排除撤销/待审）
+    effective_feedings = feeding_service.effective_records(
+        db, batch_id=batch.id, as_of=as_of, include_revoked=False
+    )
+    feed_total = round(sum(r.feed_quantity for r in effective_feedings), 6)
+
     total_cost = db.query(func.sum(CostRecord.amount)).filter(
         CostRecord.batch_id == batch.id
     ).scalar() or 0
-    
+
     total_revenue = db.query(func.sum(HarvestSale.total_amount)).filter(
         HarvestSale.batch_id == batch.id
     ).scalar() or 0
-    
+
     harvest_date = batch.actual_harvest_date
     days_cultured = None
     if harvest_date:
         days_cultured = (harvest_date - batch.stocking_date).days
-    
+
     survival_rate = 0
     if initial_quantity > 0 and harvest_weight > 0:
         avg_weight_per_fish = 0.5
         estimated_survival = harvest_weight / avg_weight_per_fish
         survival_rate = (estimated_survival / initial_quantity) * 100
-    
+
     feed_conversion_ratio = 0
     if harvest_weight > 0 and feed_total > 0:
         feed_conversion_ratio = feed_total / harvest_weight
-    
+
     yield_per_mu = 0
     if pond and pond.area > 0:
         yield_per_mu = harvest_weight / pond.area
-    
+
     profit = total_revenue - total_cost
-    
+
     costs = db.query(
         CostRecord.cost_type,
         func.sum(CostRecord.amount).label('total')
     ).filter(
         CostRecord.batch_id == batch.id
     ).group_by(CostRecord.cost_type).all()
-    
+
     cost_breakdown = {c.cost_type: c.total for c in costs}
-    
+
     known_types = ['feed', 'medicine', 'labor', 'electricity']
     other_cost = sum(
-        amount for cost_type, amount in cost_breakdown.items() 
+        amount for cost_type, amount in cost_breakdown.items()
         if cost_type not in known_types
     )
-    
+
     cost_summary_dict = {
         "feed_cost": cost_breakdown.get('feed', 0),
         "medicine_cost": cost_breakdown.get('medicine', 0),
@@ -84,27 +90,23 @@ def analyze_cycle(batch_id: int, db: Session = Depends(get_db)):
         "other_cost": other_cost,
         "total_cost": total_cost
     }
-    
-    feeding_summary_dict = db.query(
-        FeedingRecord.feed_type,
-        func.sum(FeedingRecord.feed_quantity).label('total_quantity'),
-        func.count(FeedingRecord.id).label('feeding_count')
-    ).filter(
-        FeedingRecord.batch_id == batch.id
-    ).group_by(FeedingRecord.feed_type).all()
-    
-    total_feed_weight = feed_total
-    feeding_count = sum(f.feeding_count for f in feeding_summary_dict)
+
+    # 按饲料类型汇总生效版本
+    by_type: dict[str, list[FeedingRecord]] = {}
+    for r in effective_feedings:
+        by_type.setdefault(r.feed_type, []).append(r)
+
+    feeding_count = len(effective_feedings)
     avg_daily_feed = 0
     if days_cultured and days_cultured > 0:
-        avg_daily_feed = total_feed_weight / days_cultured
-    
+        avg_daily_feed = feed_total / days_cultured
+
     feeding_summary_result = {
-        "total_feed_weight": total_feed_weight,
+        "total_feed_weight": feed_total,
         "feeding_count": feeding_count,
         "avg_daily_feed": avg_daily_feed
     }
-    
+
     return CultureCycleAnalysis(
         batch_number=batch.batch_number,
         pond_name=pond.name if pond else "未知",
@@ -127,37 +129,39 @@ def analyze_cycle(batch_id: int, db: Session = Depends(get_db)):
     )
 
 @router.get("/traceability/{batch_id}/", response_model=BatchTraceability)
-def batch_traceability(batch_id: int, db: Session = Depends(get_db)):
+def batch_traceability(batch_id: int, as_of: Optional[datetime] = None,
+                       include_revoked: bool = True, db: Session = Depends(get_db)):
     batch = db.query(Batch).filter(Batch.id == batch_id).first()
     if not batch:
         raise HTTPException(status_code=404, detail="批次不存在")
-    
+
     pond = db.query(Pond).filter(Pond.id == batch.pond_id).first()
-    
+
     stocking_records = db.query(StockingRecord).filter(
         StockingRecord.batch_id == batch.id
     ).all()
-    
-    feeding_records = db.query(FeedingRecord).filter(
-        FeedingRecord.batch_id == batch.id
-    ).all()
-    
+
+    # 投喂只列当前生效版本（含已撤销标记行），重复同步的旧行不出现
+    feeding_records = feeding_service.effective_records(
+        db, batch_id=batch.id, as_of=as_of, include_revoked=include_revoked
+    )
+
     water_quality_records = db.query(WaterQualityRecord).filter(
         WaterQualityRecord.batch_id == batch.id
     ).all()
-    
+
     medication_records = db.query(MedicationRecord).filter(
         MedicationRecord.batch_id == batch.id
     ).all()
-    
+
     cost_records = db.query(CostRecord).filter(
         CostRecord.batch_id == batch.id
     ).all()
-    
+
     harvest_sales = db.query(HarvestSale).filter(
         HarvestSale.batch_id == batch.id
     ).all()
-    
+
     return BatchTraceability(
         batch=BatchInfo(
             batch_number=batch.batch_number,
@@ -185,8 +189,17 @@ def batch_traceability(batch_id: int, db: Session = Depends(get_db)):
             {
                 "feeding_date": r.feeding_date,
                 "feed_type": r.feed_type,
-                "quantity": r.feed_quantity,
-                "unit": "kg"
+                "quantity": r.feed_quantity if r.status == "active" else 0.0,
+                "unit": "kg",
+                "status": r.status,
+                "revision_reason": r.revision_reason,
+                "version": r.version,
+                "is_late": r.is_late,
+                "review_status": r.review_status,
+                "effective_at": r.effective_at,
+                "device_id": r.device_id,
+                "device_seq": r.device_seq,
+                "record_id": r.id,
             } for r in feeding_records
         ],
         water_quality_records=[

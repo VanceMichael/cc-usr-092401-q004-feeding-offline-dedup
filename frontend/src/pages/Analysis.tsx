@@ -208,14 +208,36 @@ const Analysis: React.FC = () => {
                           <th>投喂日期</th>
                           <th>饲料类型</th>
                           <th>数量</th>
+                          <th>状态</th>
                         </tr>
                       </thead>
                       <tbody>
                         {searchResult.feeding_records.map((record, idx) => (
-                          <tr key={idx}>
+                          <tr key={idx} className={record.status === 'revoked' ? 'opacity-60' : ''}>
                             <td>{record.feeding_date}</td>
                             <td>{record.feed_type}</td>
-                            <td>{record.quantity} {record.unit}</td>
+                            <td className={record.status === 'revoked' ? 'line-through' : ''}>
+                              {record.quantity} {record.unit}
+                            </td>
+                            <td>
+                              <div className="flex flex-wrap gap-1">
+                                {record.status === 'revoked' && (
+                                  <span className="px-2 py-0.5 rounded-full text-xs bg-gray-200 text-gray-700">已撤销</span>
+                                )}
+                                {record.is_late && (
+                                  <span className="px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-800">迟报</span>
+                                )}
+                                {record.review_status === 'pending' && (
+                                  <span className="px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-800">待审</span>
+                                )}
+                                {record.version > 1 && (
+                                  <span className="px-2 py-0.5 rounded-full text-xs bg-purple-100 text-purple-700">v{record.version}</span>
+                                )}
+                                {record.status === 'active' && record.review_status !== 'pending' && !record.is_late && record.version <= 1 && (
+                                  <span className="text-xs text-gray-400">正常</span>
+                                )}
+                              </div>
+                            </td>
                           </tr>
                         ))}
                       </tbody>

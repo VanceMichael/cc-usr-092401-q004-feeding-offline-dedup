@@ -46,6 +46,88 @@ export interface FeedingRecord {
   water_temperature?: number;
   notes?: string;
   created_at: string;
+  // 离线同步
+  device_id?: string | null;
+  device_seq?: number | null;
+  source: 'device' | 'manual' | string;
+  occurred_at?: string | null;
+  // 版本
+  logical_id?: number | null;
+  version: number;
+  supersedes_id?: number | null;
+  is_current: boolean;
+  status: 'active' | 'superseded' | 'revoked' | string;
+  revision_reason?: string | null;
+  // 生效/审核/迟报
+  effective_at: string;
+  review_status: 'approved' | 'pending' | 'rejected' | string;
+  reviewed_at?: string | null;
+  is_late: boolean;
+  has_conflict: boolean;
+  in_effect: boolean;
+}
+
+export interface FeedingSyncResult {
+  result: 'created' | 'duplicate' | 'conflict' | 'revised' | 'revoked' | 'pending' | string;
+  record: FeedingRecord;
+  conflict_id?: number | null;
+  message?: string | null;
+}
+
+export interface FeedingPage {
+  items: FeedingRecord[];
+  next_cursor?: string | null;
+  has_more: boolean;
+}
+
+export interface FeedingConflict {
+  id: number;
+  device_id: string;
+  device_seq: number;
+  payload: {
+    batch_id: number;
+    feeding_date: string;
+    feed_type: string;
+    feed_quantity: number;
+    feeding_time?: string | null;
+    weather?: string | null;
+    water_temperature?: number | null;
+    notes?: string | null;
+  };
+  content_hash: string;
+  status: 'open' | 'resolved_accept' | 'resolved_keep' | string;
+  resolution_note?: string | null;
+  created_at: string;
+  resolved_at?: string | null;
+  current_record?: FeedingRecord | null;
+}
+
+export interface DailyReportLine {
+  record_id: number;
+  logical_id?: number | null;
+  version: number;
+  status: string;
+  revision_reason?: string | null;
+  feed_type: string;
+  feed_quantity: number;
+  feeding_date: string;
+  feeding_time?: string | null;
+  is_late: boolean;
+  device_id?: string | null;
+  device_seq?: number | null;
+}
+
+export interface DailyFeedingReport {
+  id: number;
+  batch_id: number;
+  business_date: string;
+  signed_at: string;
+  as_of: string;
+  total_quantity: number;
+  feeding_count: number;
+  lines: DailyReportLine[];
+  changed_since_sign?: boolean;
+  current_totals?: { total_quantity: number; feeding_count: number };
 }
 
 export interface WaterQualityRecord {
@@ -161,6 +243,15 @@ export interface FeedingRecordTrace {
   feed_type: string;
   quantity: number;
   unit?: string;
+  status: string;
+  revision_reason?: string | null;
+  version: number;
+  is_late: boolean;
+  review_status: string;
+  effective_at?: string | null;
+  device_id?: string | null;
+  device_seq?: number | null;
+  record_id?: number | null;
 }
 
 export interface WaterQualityRecordTrace {

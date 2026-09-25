@@ -19,3 +19,7 @@ logs/
 
 # Docker
 *.pid
+
+# Python cache
+__pycache__/
+*.pyc

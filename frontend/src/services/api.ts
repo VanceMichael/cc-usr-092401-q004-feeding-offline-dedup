@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type {
-  Pond, Batch, StockingRecord, FeedingRecord, WaterQualityRecord,
+  Pond, Batch, StockingRecord, FeedingRecord, FeedingSyncResult, FeedingPage,
+  FeedingConflict, DailyFeedingReport, WaterQualityRecord,
   MedicationRecord, CostRecord, HarvestSale, CultureCycleAnalysis,
   CostSummary, FeedingSummary, BatchTraceability
 } from '../types';
@@ -49,17 +50,70 @@ export const stockingRecordApi = {
   delete: (id: number) => api.delete(`/stocking-records/${id}/`),
 };
 
+export interface FeedingListParams {
+  limit?: number;
+  cursor?: string | null;
+  batch_id?: number;
+  business_date?: string;
+  review_status?: string;
+  include_history?: boolean;
+}
+
 export const feedingRecordApi = {
-  getAll: (batchId?: number) => 
-    api.get<FeedingRecord[]>('/feeding-records/', { 
-      params: batchId ? { batch_id: batchId } : {} 
+  list: (params: FeedingListParams = {}) =>
+    api.get<FeedingPage>('/feeding-records/', { params }),
+  // 兼容旧调用：一次性取首页
+  getAll: (batchId?: number) =>
+    api.get<FeedingPage>('/feeding-records/', {
+      params: { limit: 200, ...(batchId ? { batch_id: batchId } : {}) },
     }),
   getById: (id: number) => api.get<FeedingRecord>(`/feeding-records/${id}/`),
-  create: (data: Omit<FeedingRecord, 'id' | 'created_at'>) => 
-    api.post<FeedingRecord>('/feeding-records/', data),
-  update: (id: number, data: Partial<FeedingRecord>) => 
-    api.put<FeedingRecord>(`/feeding-records/${id}/`, data),
+  // 设备/人工上送，返回 result 区分 created/duplicate/conflict/revised/revoked/pending
+  sync: (data: Record<string, unknown>) =>
+    api.post<FeedingSyncResult>('/feeding-records/', data),
+  // 兼容旧调用
+  create: (data: Record<string, unknown>) =>
+    api.post<FeedingSyncResult>('/feeding-records/', data),
+  // 人工更正（新版本，可指定生效时点）
+  correct: (id: number, data: Partial<FeedingRecord>, effectiveAt?: string) =>
+    api.put<FeedingSyncResult>(`/feeding-records/${id}/`, data, {
+      params: effectiveAt ? { effective_at: effectiveAt } : {},
+    }),
+  update: (id: number, data: Partial<FeedingRecord>) =>
+    api.put<FeedingSyncResult>(`/feeding-records/${id}/`, data),
+  // 撤销（新版本）
+  revoke: (id: number, effectiveAt?: string) =>
+    api.delete<{ message: string; record: FeedingRecord }>(`/feeding-records/${id}/`, {
+      params: effectiveAt ? { effective_at: effectiveAt } : {},
+    }),
   delete: (id: number) => api.delete(`/feeding-records/${id}/`),
+  approve: (id: number, note?: string) =>
+    api.post(`/feeding-records/${id}/approve/`, null, { params: { note } }),
+  reject: (id: number, note?: string) =>
+    api.post(`/feeding-records/${id}/reject/`, null, { params: { note } }),
+  listConflicts: (status = 'open') =>
+    api.get<FeedingConflict[]>('/feeding-records/conflicts/', { params: { status } }),
+  resolveConflict: (conflictId: number, action: 'accept' | 'keep', note?: string) =>
+    api.post(`/feeding-records/conflicts/${conflictId}/resolve/`, null, {
+      params: { action, note },
+    }),
+  dailyTotals: (batchId: number, businessDate: string, asOf?: string) =>
+    api.get('/feeding-records/daily-totals/', {
+      params: { batch_id: batchId, business_date: businessDate, as_of: asOf },
+    }),
+};
+
+export const dailyFeedingReportApi = {
+  sign: (batchId: number, businessDate: string, asOf?: string) =>
+    api.post<DailyFeedingReport>('/feeding-daily-reports/sign/', null, {
+      params: { batch_id: batchId, business_date: businessDate, as_of: asOf },
+    }),
+  list: (batchId?: number) =>
+    api.get<DailyFeedingReport[]>('/feeding-daily-reports/', {
+      params: batchId ? { batch_id: batchId } : {},
+    }),
+  replay: (reportId: number) =>
+    api.get<DailyFeedingReport>(`/feeding-daily-reports/${reportId}/replay/`),
 };
 
 export const waterQualityRecordApi = {

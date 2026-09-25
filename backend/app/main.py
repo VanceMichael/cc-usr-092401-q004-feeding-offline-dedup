@@ -1,14 +1,17 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database import engine, Base
+from .migrations import run_startup_migrations
 from .routers import ponds, batches, stocking, feeding, water_quality, medication, costs, harvest, analysis
 
+# 先建新表，再为旧库的 feeding_records 补齐版本化字段
 Base.metadata.create_all(bind=engine)
+run_startup_migrations(engine)
 
 app = FastAPI(
     title="水产养殖管理系统",
-    description="一个完整的水产养殖管理系统，支持塘口管理、投苗记录、日常管理、成本核算、出塘销售和养殖周期分析",
-    version="1.0.0"
+    description="支持离线投喂同步幂等、版本化更正撤销、游标分页、迟报待审与日报签署重放",
+    version="2.0.0"
 )
 
 app.add_middleware(
@@ -23,6 +26,7 @@ app.include_router(ponds.router)
 app.include_router(batches.router)
 app.include_router(stocking.router)
 app.include_router(feeding.router)
+app.include_router(feeding.daily_router)
 app.include_router(water_quality.router)
 app.include_router(medication.router)
 app.include_router(costs.router)
@@ -34,7 +38,7 @@ def root():
     return {
         "message": "欢迎使用水产养殖管理系统API",
         "docs": "/docs",
-        "version": "1.0.0"
+        "version": "2.0.0"
     }
 
 @app.get("/health")
