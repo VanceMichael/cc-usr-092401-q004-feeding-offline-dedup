@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { TrendingUp, Target, Users, Search, Loader2 } from 'lucide-react';
-import { analysisApi, batchApi, pondApi } from '../services/api';
-import type { CultureCycleAnalysis, Batch, Pond, BatchTraceability } from '../types';
+import { TrendingUp, Target, Users, Search, Loader2, Clock, FileWarning, FileSignature, History } from 'lucide-react';
+import { analysisApi, batchApi, pondApi, feedingReportApi } from '../services/api';
+import type { CultureCycleAnalysis, Batch, Pond, BatchTraceability, DailyReport } from '../types';
 
 const Analysis: React.FC = () => {
   const [batches, setBatches] = useState<Batch[]>([]);
@@ -16,6 +16,11 @@ const Analysis: React.FC = () => {
   const [searchResult, setSearchResult] = useState<BatchTraceability | null>(null);
   const [searchLoading, setSearchLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [asOf, setAsOf] = useState<string>('');
+  const [reportDate, setReportDate] = useState<string>('');
+  const [signedReport, setSignedReport] = useState<DailyReport | null>(null);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportMsg, setReportMsg] = useState<string | null>(null);
 
   const fetchData = async () => {
     try {
@@ -40,9 +45,11 @@ const Analysis: React.FC = () => {
     setSelectedBatchId(batchId);
     setAnalysisLoading(true);
     setError(null);
-    
+    setSignedReport(null);
+    setReportMsg(null);
+
     try {
-      const response = await analysisApi.analyzeCycle(batchId);
+      const response = await analysisApi.analyzeCycle(batchId, asOf || undefined);
       setAnalysisData(response.data);
     } catch (err) {
       setError('获取分析数据失败');
@@ -55,15 +62,47 @@ const Analysis: React.FC = () => {
   const handleTraceability = async (batchId: number) => {
     setTraceabilityLoading(true);
     setError(null);
-    
+
     try {
-      const response = await analysisApi.batchTraceability(batchId);
+      const response = await analysisApi.batchTraceability(batchId, asOf || undefined);
       setTraceabilityData(response.data);
     } catch (err) {
       setError('获取追溯数据失败');
       console.error('Error fetching traceability:', err);
     } finally {
       setTraceabilityLoading(false);
+    }
+  };
+
+  const handleSignReport = async () => {
+    if (!selectedBatchId || !reportDate) return;
+    setReportBusy(true);
+    setReportMsg(null);
+    try {
+      const res = await feedingReportApi.sign(selectedBatchId, reportDate);
+      setSignedReport(res.data);
+      setReportMsg('日报已签署(或返回已签原报),快照不可变');
+    } catch (err) {
+      setReportMsg('签署失败');
+      console.error(err);
+    } finally {
+      setReportBusy(false);
+    }
+  };
+
+  const handleReplayReport = async () => {
+    if (!selectedBatchId || !reportDate) return;
+    setReportBusy(true);
+    setReportMsg(null);
+    try {
+      const res = await feedingReportApi.get(selectedBatchId, reportDate);
+      setSignedReport(res.data);
+      setReportMsg(`已按签署时点 ${res.data.as_of.replace('T', ' ').slice(0, 19)} 重放`);
+    } catch {
+      setReportMsg('该日期日报尚未签署');
+      setSignedReport(null);
+    } finally {
+      setReportBusy(false);
     }
   };
 
@@ -208,6 +247,7 @@ const Analysis: React.FC = () => {
                           <th>投喂日期</th>
                           <th>饲料类型</th>
                           <th>数量</th>
+                          <th>版本/状态</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -216,6 +256,23 @@ const Analysis: React.FC = () => {
                             <td>{record.feeding_date}</td>
                             <td>{record.feed_type}</td>
                             <td>{record.quantity} {record.unit}</td>
+                            <td>
+                              <div className="flex flex-wrap gap-1">
+                                <span className="px-1.5 py-0.5 rounded text-xs bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                  v{record.version ?? 1}
+                                </span>
+                                {record.is_late && (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-yellow-100 text-yellow-800 border border-yellow-300">
+                                    <Clock size={12} />迟报
+                                  </span>
+                                )}
+                                {record.conflict_flag && (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-red-100 text-red-800 border border-red-300">
+                                    <FileWarning size={12} />冲突
+                                  </span>
+                                )}
+                              </div>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -392,6 +449,76 @@ const Analysis: React.FC = () => {
             </div>
           ) : analysisData && selectedBatchId ? (
             <>
+              <div className="card border border-ocean-200">
+                <h2 className="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                  <History size={20} className="text-ocean-600" />
+                  时点重放与日报签署
+                </h2>
+                <p className="text-sm text-gray-500 mb-3">
+                  选择历史时点可查看当时生效版本的汇总(更正/撤销只在其生效时点后改变结果)。日报签署后快照不可变。
+                </p>
+                <div className="flex flex-col md:flex-row md:items-end gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">汇总时点 (as of)</label>
+                    <input
+                      type="datetime-local"
+                      value={asOf}
+                      onChange={(e) => setAsOf(e.target.value)}
+                      className="input-field"
+                    />
+                  </div>
+                  <button
+                    onClick={() => handleBatchSelect(selectedBatchId)}
+                    className="btn-secondary py-2"
+                  >
+                    按时点重算
+                  </button>
+                  <button
+                    onClick={() => { setAsOf(''); handleBatchSelect(selectedBatchId); }}
+                    className="btn-secondary py-2"
+                  >
+                    回到当前
+                  </button>
+                  <div className="flex-1" />
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">日报业务日期</label>
+                    <input
+                      type="date"
+                      value={reportDate}
+                      onChange={(e) => setReportDate(e.target.value)}
+                      className="input-field"
+                    />
+                  </div>
+                  <button
+                    onClick={handleSignReport}
+                    disabled={reportBusy || !reportDate}
+                    className="btn-primary py-2 flex items-center gap-2"
+                  >
+                    <FileSignature size={16} /> 签署日报
+                  </button>
+                  <button
+                    onClick={handleReplayReport}
+                    disabled={reportBusy || !reportDate}
+                    className="btn-secondary py-2"
+                  >
+                    重放已签日报
+                  </button>
+                </div>
+                {reportMsg && <p className="text-sm text-ocean-700 mt-3">{reportMsg}</p>}
+                {signedReport && (
+                  <div className="mt-4 p-3 bg-gray-50 rounded-lg text-sm">
+                    <p className="font-medium text-gray-800">
+                      {signedReport.business_date} 日报 ·
+                      签署于 {signedReport.signed_at.replace('T', ' ').slice(0, 19)}
+                    </p>
+                    <p className="text-gray-600 mt-1">
+                      总投喂量 <span className="font-semibold text-green-700">{signedReport.total_quantity.toLocaleString()}</span> 公斤 ·
+                      生效记录 <span className="font-semibold">{signedReport.record_count}</span> 条
+                    </p>
+                  </div>
+                )}
+              </div>
+
               <div className="card">
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">
                   养殖周期分析 - {getBatchNumber(selectedBatchId)}

@@ -25,7 +25,7 @@ class PondResponse(PondBase):
     updated_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class BatchBase(BaseModel):
     batch_number: str
@@ -54,7 +54,7 @@ class BatchResponse(BatchBase):
     updated_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class StockingRecordBase(BaseModel):
     batch_id: int
@@ -84,7 +84,7 @@ class StockingRecordResponse(StockingRecordBase):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class FeedingRecordBase(BaseModel):
     batch_id: int
@@ -97,24 +97,95 @@ class FeedingRecordBase(BaseModel):
     notes: Optional[str] = None
 
 class FeedingRecordCreate(FeedingRecordBase):
-    pass
+    # 离线补传:设备号 + 设备本地流水号(设备只保证这一组合唯一)
+    device_id: Optional[str] = None
+    client_seq: Optional[str] = None
+    # 设备时间轴:事件发生时间、要求生效的时间(可跨午夜,与上传时间不同)
+    occurred_at: Optional[datetime] = None
+    effective_at: Optional[datetime] = None
+    # upsert=登记或更正, revoke=撤销;version 为设备自报版本号
+    action: Optional[str] = "upsert"
+    version: Optional[int] = None
+    # 人工更正/撤销已有逻辑记录时使用
+    root_id: Optional[int] = None
 
 class FeedingRecordUpdate(BaseModel):
-    batch_id: Optional[int] = None
-    feeding_date: Optional[date] = None
-    feed_type: Optional[str] = None
-    feed_quantity: Optional[float] = None
-    feeding_time: Optional[str] = None
-    weather: Optional[str] = None
-    water_temperature: Optional[float] = None
-    notes: Optional[str] = None
+    # 更正与撤销一律以新版本实现;这里仅保留审批等管理字段
+    review_status: Optional[str] = None
 
 class FeedingRecordResponse(FeedingRecordBase):
     id: int
     created_at: datetime
+    device_id: Optional[str] = None
+    client_seq: Optional[str] = None
+    content_hash: Optional[str] = None
+    version: int
+    action: str
+    root_id: Optional[int] = None
+    replaces_id: Optional[int] = None
+    occurred_at: Optional[datetime] = None
+    effective_at: datetime
+    received_at: datetime
+    review_status: str
+    pending_reason: Optional[str] = None
+    conflict_flag: bool
+    # 便捷展示标志
+    is_late: Optional[bool] = False
+    is_revoked: Optional[bool] = False
+    has_newer_version: Optional[bool] = False
 
     class Config:
-        orm_mode = True
+        from_attributes = True
+
+class FeedingSyncResult(BaseModel):
+    """同步结果:重复同步返回原记录;冲突与新建/更正/撤销/待审结果不同。"""
+    outcome: str
+    message: str
+    record: FeedingRecordResponse
+    conflict_id: Optional[int] = None
+
+class FeedingRecordPage(BaseModel):
+    """键集游标分页:按 (feeding_date, id) 稳定排序,并发补传下不重不漏。"""
+    items: List[FeedingRecordResponse]
+    next_cursor: Optional[str] = None
+    has_more: bool
+
+class FeedingConflictResponse(BaseModel):
+    id: int
+    device_id: str
+    client_seq: str
+    version: int
+    batch_id: Optional[int] = None
+    existing_record_id: Optional[int] = None
+    incoming_payload: Optional[str] = None
+    resolved: bool
+    resolution: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class ReviewAction(BaseModel):
+    # approve=批准待审记录并立即生效 / reject=驳回 / resolve_conflict=处理冲突
+    action: str
+    resolution: Optional[str] = None
+    effective_at: Optional[datetime] = None
+
+class RevokeRequest(BaseModel):
+    effective_at: Optional[datetime] = None
+
+class DailyReportResponse(BaseModel):
+    id: int
+    batch_id: int
+    business_date: date
+    signed_at: datetime
+    as_of: datetime
+    total_quantity: float
+    record_count: int
+    snapshot: List[FeedingRecordResponse]
+
+    class Config:
+        from_attributes = True
 
 class WaterQualityRecordBase(BaseModel):
     batch_id: int
@@ -148,7 +219,7 @@ class WaterQualityRecordResponse(WaterQualityRecordBase):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class MedicationRecordBase(BaseModel):
     batch_id: int
@@ -184,7 +255,7 @@ class MedicationRecordResponse(MedicationRecordBase):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class CostRecordBase(BaseModel):
     batch_id: int
@@ -216,7 +287,7 @@ class CostRecordResponse(CostRecordBase):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class HarvestSaleBase(BaseModel):
     batch_id: int
@@ -248,7 +319,7 @@ class HarvestSaleResponse(HarvestSaleBase):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class CostSummaryItem(BaseModel):
     type: str
@@ -291,6 +362,12 @@ class FeedingRecordTrace(BaseModel):
     feed_type: str
     quantity: float
     unit: Optional[str] = None
+    version: Optional[int] = 1
+    action: Optional[str] = "upsert"
+    review_status: Optional[str] = "approved"
+    is_late: Optional[bool] = False
+    conflict_flag: Optional[bool] = False
+    effective_at: Optional[datetime] = None
 
 class WaterQualityRecordTrace(BaseModel):
     record_date: date

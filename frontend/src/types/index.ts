@@ -46,6 +46,59 @@ export interface FeedingRecord {
   water_temperature?: number;
   notes?: string;
   created_at: string;
+  device_id?: string | null;
+  client_seq?: string | null;
+  content_hash?: string | null;
+  version: number;
+  action: 'upsert' | 'revoke';
+  root_id?: number | null;
+  replaces_id?: number | null;
+  occurred_at?: string | null;
+  effective_at: string;
+  received_at: string;
+  review_status: 'approved' | 'pending' | 'rejected';
+  pending_reason?: 'late_closed' | 'late_window' | null;
+  conflict_flag: boolean;
+  is_late?: boolean;
+  is_revoked?: boolean;
+  has_newer_version?: boolean;
+}
+
+export interface FeedingSyncResult {
+  outcome: 'created' | 'duplicate' | 'conflict' | 'revised' | 'revoked' | 'pending';
+  message: string;
+  record: FeedingRecord;
+  conflict_id?: number | null;
+}
+
+export interface FeedingRecordPage {
+  items: FeedingRecord[];
+  next_cursor?: string | null;
+  has_more: boolean;
+}
+
+export interface FeedingConflict {
+  id: number;
+  device_id: string;
+  client_seq: string;
+  version: number;
+  batch_id?: number | null;
+  existing_record_id?: number | null;
+  incoming_payload?: string | null;
+  resolved: boolean;
+  resolution?: string | null;
+  created_at: string;
+}
+
+export interface DailyReport {
+  id: number;
+  batch_id: number;
+  business_date: string;
+  signed_at: string;
+  as_of: string;
+  total_quantity: number;
+  record_count: number;
+  snapshot: FeedingRecord[];
 }
 
 export interface WaterQualityRecord {
@@ -120,6 +173,7 @@ export interface FeedingSummary {
   total_feed_weight: number;
   feeding_count: number;
   avg_daily_feed: number;
+  by_feed_type?: Record<string, { total_quantity: number; feeding_count: number }>;
 }
 
 export interface CultureCycleAnalysis {
@@ -161,6 +215,12 @@ export interface FeedingRecordTrace {
   feed_type: string;
   quantity: number;
   unit?: string;
+  version?: number;
+  action?: string;
+  review_status?: string;
+  is_late?: boolean;
+  conflict_flag?: boolean;
+  effective_at?: string | null;
 }
 
 export interface WaterQualityRecordTrace {

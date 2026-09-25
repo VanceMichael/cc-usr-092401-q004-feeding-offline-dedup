@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
+from datetime import datetime
 from ..database import get_db
 from ..models import Batch, Pond
 from ..schemas import BatchCreate, BatchUpdate, BatchResponse
@@ -52,6 +53,9 @@ def update_batch(batch_id: int, batch: BatchUpdate, db: Session = Depends(get_db
         raise HTTPException(status_code=404, detail="批次不存在")
     
     update_data = batch.dict(exclude_unset=True)
+    new_status = update_data.get("status")
+    if new_status in ("closed", "harvested") and not db_batch.closed_at:
+        db_batch.closed_at = datetime.utcnow()
     for key, value in update_data.items():
         setattr(db_batch, key, value)
     
